@@ -1,30 +1,30 @@
 "use client";
-import React, { createContext, useContext, useState, useEffect, useCallback } from "react";
-import { AppContextType, Task, Submission, AIVerdict } from "../types";
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
+import { AppContextType, Task, Submission } from "../types";
+import * as gl from "../lib/genLayerClient";
 
 const AppContext = createContext<AppContextType | null>(null);
-const MODERATOR_ADDRESS = "0x4c5A99FF7a0B7F04e356b40BC0493DDA66A9338f";
+const MODERATOR_ADDRESS = "0x3eDF36124385e20cec36A10b7C971cFb0a6a886C";
 
 function generateId() {
-  return Math.random().toString(36).substring(2, 10);
+  return Math.random().toString(36).substring(2, 10) + Date.now().toString(36);
 }
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [isLoadingTasks, setIsLoadingTasks] = useState(false);
   const [userPoints, setUserPoints] = useState<Record<string, number>>({});
   const [theme, setTheme] = useState<"dark" | "light">("dark");
+  const pollRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
-    const savedTheme = localStorage.getItem("veridict_theme") as "dark" | "light" | null;
-    if (savedTheme) setTheme(savedTheme);
-    const savedTasks = localStorage.getItem("veridict_tasks");
-    if (savedTasks) setTasks(JSON.parse(savedTasks));
-    const savedPoints = localStorage.getItem("veridict_points");
-    if (savedPoints) setUserPoints(JSON.parse(savedPoints));
+    const saved = localStorage.getItem("veridict_theme") as "dark" | "light" | null;
+    if (saved) setTheme(saved);
+    refreshTasks();
+    // Poll every 20 seconds
+    pollRef.current = setInterval(refreshTasks, 20000);
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, []);
-
-  useEffect(() => { localStorage.setItem("veridict_tasks", JSON.stringify(tasks)); }, [tasks]);
-  useEffect(() => { localStorage.setItem("veridict_points", JSON.stringify(userPoints)); }, [userPoints]);
 
   const toggleTheme = useCallback(() => {
     setTheme((prev) => {
@@ -34,178 +34,123 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
-  const createTask = useCallback(
-    (wallet: string | null, title: string, description: string, rewardPoints: number, autoApprove = false) => {
-      if (!wallet) return;
-      const task: Task = {
-        id: generateId(),
-        title,
-        description,
-        rewardPoints,
-        creator: wallet,
-        approvedByModerator: autoApprove,
-        submissions: [],
-        createdAt: Date.now(),
-      };
-      setTasks((prev) => [task, ...prev]);
-    },
-    []
-  );
-
-  // Submit a link → AI runs immediately → points = AI score (not rewardPoints)
-  const submitTask = useCallback((wallet: string | null, taskId: string, link: string) => {
-    if (!wallet) return;
-
-    // Prevent duplicate submission from same wallet on same task
-    const task = tasks.find((t) => t.id === taskId);
-    if (!task) return;
-    const alreadySubmitted = task.submissions.some(
-      (s) => s.submittedBy.toLowerCase() === wallet.toLowerCase()
-    );
-    if (alreadySubmitted) return;
-
-    // AI score = random 0–100; points awarded = the score itself
-    const aiScore = Math.floor(Math.random() * 101);
-    const aiVerdict: AIVerdict = aiScore >= 60 ? "Approved" : "Rejected";
-    const pointsAwarded = aiScore; // points = AI score, not the task's rewardPoints
-
-    const submission: Submission = {
-      id: generateId(),
-      taskId,
-      submittedBy: wallet,
-      link,
-      aiScore,
-      aiVerdict,
-      disputed: false,
-      disputeResolved: false,
-      disputeEndsAt: null,
-      votes: { agree: 0, disagree: 0 },
-      voters: [],
-      submittedAt: Date.now(),
-      pointsAwarded,
-    };
-
-    setTasks((prev) =>
-      prev.map((t) =>
-        t.id === taskId ? { ...t, submissions: [...t.submissions, submission] } : t
-      )
-    );
-
-    // Optimistic Democracy: award points immediately if approved
-    if (aiVerdict === "Approved") {
-      setUserPoints((pts) => ({
-        ...pts,
-        [wallet]: (pts[wallet] || 0) + pointsAwarded,
-      }));
-    }
-  }, [tasks]);
-
-  // Dispute a specific submission — triggers Equivalence Principle
-  const disputeSubmission = useCallback((taskId: string, submissionId: string) => {
-    setTasks((prev) =>
-      prev.map((t) => {
-        if (t.id !== taskId) return t;
-        return {
+  const refreshTasks = useCallback(async () => {
+    setIsLoadingTasks(true);
+    try {
+      const data = await gl.getTasks();
+      if (data && data.length >= 0) {
+        // Map chain data to Task type, attach empty submissions array
+        const mapped: Task[] = data.map((t: any) => ({
           ...t,
-          submissions: t.submissions.map((s) =>
-            s.id === submissionId
-              ? { ...s, disputed: true, disputeEndsAt: Date.now() + 5 * 60 * 1000 }
-              : s
-          ),
-        };
-      })
-    );
+          submissions: [],
+        }));
+        setTasks(mapped);
+      }
+    } catch (e) {
+      console.error("refreshTasks error:", e);
+    } finally {
+      setIsLoadingTasks(false);
+    }
   }, []);
 
-  // Vote on a specific submission — majority overrides AI if community disagrees
-  const voteOnSubmission = useCallback(
-    (wallet: string | null, taskId: string, submissionId: string, choice: "agree" | "disagree") => {
-      if (!wallet) return;
-      setTasks((prev) =>
-        prev.map((t) => {
-          if (t.id !== taskId) return t;
-          return {
-            ...t,
-            submissions: t.submissions.map((s) => {
-              if (s.id !== submissionId) return s;
-              if (s.voters.map(v => v.toLowerCase()).includes(wallet.toLowerCase())) return s;
-              if (s.disputeResolved) return s;
+  const delayedRefresh = useCallback(async () => {
+    await refreshTasks();
+    setTimeout(refreshTasks, 5000);
+    setTimeout(refreshTasks, 15000);
+  }, [refreshTasks]);
 
-              const updatedVotes = { ...s.votes, [choice]: s.votes[choice] + 1 };
-              const updatedVoters = [...s.voters, wallet];
-              const total = updatedVotes.agree + updatedVotes.disagree;
-
-              if (total < 3) {
-                return { ...s, votes: updatedVotes, voters: updatedVoters };
-              }
-
-              const communityAgreesWithAI = updatedVotes.agree >= updatedVotes.disagree;
-
-              if (communityAgreesWithAI) {
-                // AI + Community align → verdict stands
-                return { ...s, votes: updatedVotes, voters: updatedVoters, disputeResolved: true };
-              } else {
-                // Community overrides AI → flip verdict
-                const flippedVerdict: AIVerdict = s.aiVerdict === "Approved" ? "Rejected" : "Approved";
-
-                // AI approved → community rejects → revoke points
-                if (s.aiVerdict === "Approved" && flippedVerdict === "Rejected") {
-                  setUserPoints((pts) => ({
-                    ...pts,
-                    [s.submittedBy]: Math.max(0, (pts[s.submittedBy] || 0) - s.pointsAwarded),
-                  }));
-                }
-
-                // AI rejected → community approves → award points
-                if (s.aiVerdict === "Rejected" && flippedVerdict === "Approved") {
-                  setUserPoints((pts) => ({
-                    ...pts,
-                    [s.submittedBy]: (pts[s.submittedBy] || 0) + s.pointsAwarded,
-                  }));
-                }
-
-                return {
-                  ...s,
-                  votes: updatedVotes,
-                  voters: updatedVoters,
-                  aiVerdict: flippedVerdict,
-                  disputeResolved: true,
-                };
-              }
-            }),
-          };
-        })
-      );
-    },
-    []
-  );
-
-  const approveTask = useCallback((taskId: string) => {
-    setTasks((prev) =>
-      prev.map((t) => (t.id === taskId ? { ...t, approvedByModerator: true } : t))
-    );
+  const refreshPoints = useCallback(async (wallet: string) => {
+    try {
+      const pts = await gl.getPoints(wallet);
+      setUserPoints((prev) => ({ ...prev, [wallet]: pts }));
+    } catch (e) {
+      console.error("refreshPoints error:", e);
+    }
   }, []);
 
-  const deleteTask = useCallback((taskId: string) => {
-    setTasks((prev) => prev.filter((t) => t.id !== taskId));
+  const getTaskSubmissions = useCallback(async (taskId: string): Promise<Submission[]> => {
+    try {
+      const data = await gl.getSubmissions(taskId);
+      return (data as Submission[]) || [];
+    } catch (e) {
+      console.error("getTaskSubmissions error:", e);
+      return [];
+    }
   }, []);
+
+  // Task creation is done via GenLayer Studio directly — this is a no-op on frontend
+  const createTask = useCallback(async (
+    wallet: string,
+    title: string,
+    description: string,
+    keywords: string,
+    rewardPoints: string
+  ): Promise<boolean> => {
+    // Tasks are created via GenLayer Studio UI, not from this frontend
+    // Refresh to pick up any new tasks created in Studio
+    await delayedRefresh();
+    return true;
+  }, [delayedRefresh]);
+
+  const submitTask = useCallback(async (
+    wallet: string,
+    taskId: string,
+    link: string
+  ): Promise<boolean> => {
+    const submissionId = generateId();
+    const ok = await gl.submitTask(wallet, submissionId, taskId, link);
+    if (ok) {
+      await delayedRefresh();
+      setTimeout(() => refreshPoints(wallet), 5000);
+    }
+    return ok;
+  }, [delayedRefresh, refreshPoints]);
+
+  const disputeSubmission = useCallback(async (
+    wallet: string,
+    submissionId: string
+  ): Promise<boolean> => {
+    const ok = await gl.disputeSubmission(wallet, submissionId);
+    if (ok) await delayedRefresh();
+    return ok;
+  }, [delayedRefresh]);
+
+  const voteOnSubmission = useCallback(async (
+    wallet: string,
+    submissionId: string,
+    choice: "agree" | "disagree"
+  ): Promise<boolean> => {
+    const ok = await gl.voteOnSubmission(wallet, submissionId, choice);
+    if (ok) await delayedRefresh();
+    return ok;
+  }, [delayedRefresh]);
+
+  const deleteTask = useCallback(async (
+    wallet: string,
+    taskId: string
+  ): Promise<boolean> => {
+    // Also done via Studio — just refresh
+    await delayedRefresh();
+    return true;
+  }, [delayedRefresh]);
 
   return (
-    <AppContext.Provider
-      value={{
-        tasks,
-        createTask,
-        submitTask,
-        disputeSubmission,
-        voteOnSubmission,
-        approveTask,
-        deleteTask,
-        userPoints,
-        theme,
-        toggleTheme,
-        MODERATOR_ADDRESS,
-      }}
-    >
+    <AppContext.Provider value={{
+      tasks,
+      isLoadingTasks,
+      createTask,
+      submitTask,
+      disputeSubmission,
+      voteOnSubmission,
+      deleteTask,
+      refreshTasks,
+      getTaskSubmissions,
+      userPoints,
+      refreshPoints,
+      theme,
+      toggleTheme,
+      MODERATOR_ADDRESS,
+    }}>
       {children}
     </AppContext.Provider>
   );

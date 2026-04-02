@@ -2,40 +2,45 @@ export type AIVerdict = "Approved" | "Rejected" | "Pending";
 
 export interface Submission {
   id: string;
-  taskId: string;
-  submittedBy: string;
+  task_id: string;
+  submitted_by: string;
   link: string;
-  aiScore: number;
-  aiVerdict: AIVerdict;
-  disputed: boolean;
-  disputeResolved: boolean;
-  disputeEndsAt: number | null;
-  votes: { agree: number; disagree: number };
+  ai_score: string;
+  ai_verdict: AIVerdict;
+  points_awarded: string;
+  disputed: string;
+  dispute_resolved: string;
+  dispute_ends_at: string;
+  votes_agree: string;
+  votes_disagree: string;
+  submitted_at: string;
   voters: string[];
-  submittedAt: number;
-  pointsAwarded: number; // actual AI score used as points
 }
 
 export interface Task {
   id: string;
   title: string;
   description: string;
-  rewardPoints: number; // max points possible
+  keywords: string;
+  reward_points: string;
   creator: string;
-  approvedByModerator: boolean;
-  submissions: Submission[];
-  createdAt: number;
+  created_at: string;
+  submission_count: string;
+  submissions?: Submission[];
 }
 
 export interface AppContextType {
   tasks: Task[];
-  createTask: (wallet: string | null, title: string, description: string, rewardPoints: number, autoApprove?: boolean) => void;
-  submitTask: (wallet: string | null, taskId: string, link: string) => void;
-  disputeSubmission: (taskId: string, submissionId: string) => void;
-  voteOnSubmission: (wallet: string | null, taskId: string, submissionId: string, choice: "agree" | "disagree") => void;
-  approveTask: (taskId: string) => void;
-  deleteTask: (taskId: string) => void;
+  isLoadingTasks: boolean;
+  createTask: (wallet: string, title: string, description: string, keywords: string, rewardPoints: string) => Promise<boolean>;
+  submitTask: (wallet: string, taskId: string, link: string) => Promise<boolean>;
+  disputeSubmission: (wallet: string, submissionId: string) => Promise<boolean>;
+  voteOnSubmission: (wallet: string, submissionId: string, choice: "agree" | "disagree") => Promise<boolean>;
+  deleteTask: (wallet: string, taskId: string) => Promise<boolean>;
+  refreshTasks: () => Promise<void>;
+  getTaskSubmissions: (taskId: string) => Promise<Submission[]>;
   userPoints: Record<string, number>;
+  refreshPoints: (wallet: string) => Promise<void>;
   theme: "dark" | "light";
   toggleTheme: () => void;
   MODERATOR_ADDRESS: string;

@@ -9,12 +9,33 @@ import {
   trustWallet,
   phantomWallet,
 } from "@rainbow-me/rainbowkit/wallets";
-import { mainnet, polygon, arbitrum, optimism, base } from "wagmi/chains";
+import { defineChain } from "viem";
+
+// GenLayer Studionet
+export const genlayerStudionet = defineChain({
+  id: 61999,
+  name: "GenLayer Studionet",
+  nativeCurrency: {
+    name: "GEN",
+    symbol: "GEN",
+    decimals: 18,
+  },
+  rpcUrls: {
+    default: { http: ["https://studio.genlayer.com/api"] },
+  },
+  blockExplorers: {
+    default: {
+      name: "GenLayer Studio",
+      url: "https://studio.genlayer.com",
+    },
+  },
+  testnet: true,
+});
 
 export const wagmiConfig = getDefaultConfig({
   appName: "Veridict",
   projectId: "b8a1daa2f2e3c4d5e6f7a8b9c0d1e2f3",
-  chains: [mainnet, polygon, arbitrum, optimism, base],
+  chains: [genlayerStudionet],
   wallets: [
     {
       groupName: "Popular",
